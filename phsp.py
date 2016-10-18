@@ -1,9 +1,7 @@
 import logging
 import struct
-import argparse
 from collections import OrderedDict
 
-# argparse.
 logger = logging.getLogger(__name__)
 
 HEADER_FIELDS = OrderedDict((
@@ -29,6 +27,58 @@ RECORD_FIELDS = OrderedDict((
 ))
 RECORD_FIELDS_ZLAST = RECORD_FIELDS.copy()
 RECORD_FIELDS_ZLAST['zlast'] = 'f'
+
+
+def make_latch(npass, iq, brem_or_positron, bit_region, bit_region_number):
+    latch = 0
+    if npass:
+        latch |= 1 << 31
+    if iq == -1:
+        latch |= 1 << 30
+    elif iq == 1:
+        latch |= 1 << 29
+    if brem_or_positron:
+        latch |= 1
+    latch |= bit_region & 0xffffff - 1
+    latch |= bit_region_number << 24 & 0xf000000
+
+
+def parse_latch(latch):
+    npass = latch & 1 << 31
+    if latch & 1 << 30:
+        iq = -1
+    elif latch & 1 << 29:
+        iq = 1
+    else:
+        iq = 0
+    brem_or_positron = latch & 1
+    bit_region = latch & 0xffffff - 1
+    bit_region_number = (latch & 0xf000000) >> 24
+    return npass, iq, brem_or_positron, bit_region, bit_region_number
+
+    """
+    see GET_LATCHTMP_ESHORT_WEIGHTTMP
+
+    bit 0 Set to 1 if a bremsstrahlung or positron annihilation event occurs in the history; 0
+        otherwise(not used for LATCH_OPTION = 1).
+
+    bit 1-23 Used to record the bit region where a particle has been and/or has interacted
+        (Note that the bit set for a region is determined by IREGION_TO_BIT for that region)
+
+    bit 24-28 Stores the bit region number (as opposed to geometric region) in which a secondary
+        particle is created; if these bits are all 0, the particle is a primary particle (not
+        for LATCH_OPTION = 1).
+
+    bit 29-30 Store the charge of a particle when LATCH is output to a phase space file (see
+        section 7 on phase space files). During a simulation, bit 30 is used to identify a
+        contaminant particle but this information is not output to the phase space file. Set
+        to 1 if the particle is a contaminant particle; 0 otherwise. Note that if LATCH is not
+        inherited (i.e. when LATCH_OPTION = 1), bit 30 loses its meaning.
+
+    bit 31 Set to 1 if a particle has crossed a scoring plane more than once when LATCH is output
+        to a phase space file (see section 7 on phase space files above)
+"""
+    pass
 
 
 def write(fname, header, records):
