@@ -34,16 +34,18 @@ RECORD_FIELDS_ZLAST['zlast'] = 'f'
 def write(fname, header, records):
     logger.debug('Writing to %s', fname)
     f = open(fname, 'wb')
+
     if records and 'zlast' in records[0]:
         f.write(b'MODE2')
         record_fields = RECORD_FIELDS_ZLAST
+        header_padding = b'\0' * 7
     else:
         f.write(b'MODE0')
         record_fields = RECORD_FIELDS
+        header_padding = b'\0' * 3
     f.write(struct.pack(HEADER_FORMAT, *header.values()))
-    # pad with 3 null bytes so header is correct length
-    # this isn't going to work with zlast...bugger.
-    f.write(b'\0\0\0')
+    # pad with null bytes so header is correct length
+    f.write(header_padding)
     record_format = ''.join(record_fields.values())
     for record in records:
         f.write(struct.pack(record_format, *record.values()))
@@ -57,13 +59,15 @@ def read(fname):
     if mode_bytes == b'MODE0':
         logger.debug('Found MODE0 file')
         record_fields = RECORD_FIELDS
+        header_padding = 3
     elif mode_bytes == b'MODE2':
         logger.debug('Found MODE2 file')
         record_fields = RECORD_FIELDS_ZLAST
+        header_padding = 7
     else:
         raise ValueError('First 5 bytes must specify mode (MODE0 or MODE2)')
     # discard last three null characters
-    header_bytes = f.read(HEADER_SIZE + 3)[:HEADER_SIZE]
+    header_bytes = f.read(HEADER_SIZE + header_padding)[:HEADER_SIZE]
     header_values = struct.unpack(HEADER_FORMAT, header_bytes)
     header = OrderedDict(zip(HEADER_FIELDS.keys(), header_values))
     logger.debug('Found header %s', header)
