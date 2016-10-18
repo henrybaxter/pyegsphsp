@@ -66,7 +66,6 @@ def read(fname):
         header_padding = 7
     else:
         raise ValueError('First 5 bytes must specify mode (MODE0 or MODE2)')
-    # discard last three null characters
     header_bytes = f.read(HEADER_SIZE + header_padding)[:HEADER_SIZE]
     header_values = struct.unpack(HEADER_FORMAT, header_bytes)
     header = OrderedDict(zip(HEADER_FIELDS.keys(), header_values))
