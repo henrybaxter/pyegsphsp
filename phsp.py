@@ -37,27 +37,36 @@ RECORD_FIELDS_ZLAST['zlast'] = 'f'
 MODE0 = b'MODE0'
 MODE2 = b'MODE2'
 
+# rewrite it to allow
 
-def translate(fname, x, y):
+def translate(fname, x_translate, y_translate):
+    buffer_size = 1024 * 64
     f = open(fname, 'r+b')
-    mode = f.read(5)
-    if mode == MODE0:
+    buf = bytearray(f.read(buffer_size))
+    if buf.startswith(MODE0):
         record_length = 28
-    elif mode == MODE2:
+    elif buf.startswith(MODE2):
         record_length = 32
     else:
-        raise ValueError('Unknown mode {}'.format(repr(mode)))
-    total_particles = struct.unpack('i', f.read(4))[0]
+        raise ValueError('Unknown mode {}'.format(repr(buf[:5])))
+    total_particles = struct.unpack('i', buf[5:9])[0]
     print('total particles', total_particles)
     XY_OFFSET = 8
-    for i in range(total_particles):
-        index = (i + 1) * record_length + XY_OFFSET
-        f.seek(index)
-        x, y = struct.unpack('ff', f.read(8))
-        x += x
-        y += y
-        f.seek(index)
-        f.write(struct.pack('ff', x, y))
+    offset = record_length
+    position = 0
+    while len(buf):
+        num_records = (len(buf) - offset) // record_length
+        for i in range(num_records):
+            index = offset + i * record_length + XY_OFFSET
+            x, y = struct.unpack('ff', buf[index:index + 8])
+            x += x_translate
+            y += y_translate
+            buf[index:index + 8] = struct.pack('ff', x, y)
+        f.seek(position)
+        f.write(buf)
+        buf = bytearray(f.read(buffer_size))
+        offset = (len(buf) - offset) % record_length
+        position += len(buf)
     print('done')
 
 
@@ -122,6 +131,7 @@ def parse_args():
     parser.add_argument('output')
     parser.add_argument('--translate-x', '-tx', default=0, type=float, help='Translate phase space by tx centimeters')
     parser.add_argument('--translate-y', '-ty', default=0, type=float, help='Translate phase space by ty centimeters')
+    parser.add_argument('--show', action='store_true')
     return parser.parse_args()
 
 
@@ -162,9 +172,11 @@ if __name__ == '__main__':
     else:
         print('just reading one')
         header, records = read(args.input[0])
+        for i, record in enumerate(records):
+            print(i, record.x_cm)
     if args.translate_x or args.translate_y:
         def translate(records):
             for r in records:
                 yield r._replace(x_cm=r.x_cm + args.translate_x, y_cm=r.y_cm + args.translate_y)
         records = translate(records)
-    write(args.output, header, records)
+    #write(args.output, header, records)
