@@ -10,8 +10,11 @@ use std::io::SeekFrom;
 use std::str;
 use std::ops::Add;
 use std::fs;
+use std::io;
+use std::fmt;
 
 use byteorder::{ByteOrder, LittleEndian};
+use clap::{App, Arg, ArgGroup};
 
 const BUFFER_SIZE: usize = 1024 * 64;
 
@@ -120,28 +123,63 @@ impl Record {
 
 }
 
-fn parse_header(path: &Path) -> Result<Header, &'static str> {
-    let mut file = match File::open(&path) {
-        Err(why) => return format!("Cannot open {}: {}", path.display(), why.description()),
-        Ok(file) => file
-    };
+#[derive(Debug)]
+enum EGSError {
+    Io(io::Error),
+    BadMode,
+    BadLength
+}
+
+impl From<io::Error> for EGSError {
+    fn from(err: io::Error) -> EGSError {
+        EGSError::Io(err)
+    }
+}
+
+impl fmt::Display for EGSError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            EGSError::Io(ref err) => err.fmt(f),
+            EGSError::BadMode => write!(f, "First 5 bytes of file are invalid, \
+                                            must be MODE0 or MODE2"),
+            EGSError::BadLength => write!(f, "Number of total particles does not\
+                                             match byte length of file")
+        }
+    }
+}
+
+impl Error for EGSError {
+    fn description(&self) -> &str {
+        match *self {
+            EGSError::Io(ref err) => err.description(),
+            EGSError::BadMode => "invalid mode"
+        }
+    }
+
+    fn cause(&self) -> Option<&Error> {
+        match *self {
+            EGSError::Io(ref err) => Some(err),
+            EGSError::BadMode => None,
+            EGSError::BadLength => None
+        }
+    }
+}
+
+fn parse_header(path: &Path) -> Result<Header, EGSError> {
+    let mut file = try!(File::open(&path));
     let mut buffer = [0; 25];
-    file.read_exact(&mut buffer).unwrap();
-    let mut header = match Header::new_from_bytes(&buffer) {
-        Err(err) => return Err(err),
-        Ok(ok) => ok
-    };
-    let metadata = file.metadata().unwrap();
+    try!(file.read_exact(&mut buffer));
+    let header = try!(Header::new_from_bytes(&buffer));
+    let metadata = try!(file.metadata().unwrap());
     if metadata.len() != header.expected_bytes() {
-        Err(format!("Malformed phase space file, expected {} bytes but found {}",
-            header.expected_bytes(), metadata.len()))
+        Err(EGSError::BadLength)
     } else {
         Ok(header)
     }
 }
 
 
-fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -> Result<(), &'static str> {
+fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -> Result<(), &'static String> {
     assert!(input_paths.len() > 0, "Cannot combine zero files");
     let path = input_paths[0];
     let mut header = try!(parse_header(&path));
@@ -149,7 +187,7 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
     for path in input_paths[1..].iter() {
         header = try!(parse_header(&path));
         if &header.mode != &final_header.mode {
-            return Err(format!("File {} has different mode/zlast than the initial file", path.display()))
+            return Err(&format!("File {} has different mode/zlast than the initial file", path.display()))
         }
         final_header.merge(&header);
     }
@@ -182,11 +220,11 @@ fn transform(input_path: &Path, output_path: &Path, matrix: &[[f32; 2]]) -> Resu
     // or, we can read it in, and write it somewhere else...
     let header = try!(parse_header(input_path));
     let mut input_file = match File::open(&input_path) {
-        Err(why) => return Err(format!("Couldn't open {}: {}", input_path.display(), why.description())),
+        Err(why) => return Err(&format!("Couldn't open {}: {}", input_path.display(), why.description())),
         Ok(file) => file
     };
     let mut output_file = match File::open(&output_path) {
-        Err(why) => return Err(format!("Couldn't open {} for writing: {}", output_path.display(), why.description())),
+        Err(why) => return Err(&format!("Couldn't open {} for writing: {}", output_path.display(), why.description())),
         Ok(file) => file
     };
     let mut buffer = [0; BUFFER_SIZE];
@@ -207,13 +245,13 @@ fn transform(input_path: &Path, output_path: &Path, matrix: &[[f32; 2]]) -> Resu
     // here we should verify we read the right number of records, like this:
     assert!(offset == 0, "Offset should be zero at end of reading");
     let records_read = position / header.record_length as u64 - header.record_length as u64;
-    assert!(records_read == header.total_particles as u64, "Records read should equal ")
+    assert!(records_read == header.total_particles as u64, "Records read should equal ");
 }
 
 fn transform_in_place(path: &Path, matrix: &[[f32; 2]]) -> Result<(), &'static str> {
     let header = try!(parse_header(path));
     let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
-        Err(why) => return Err(format!("Couldn't open {}: {}", path.display(), why.description())),
+        Err(why) => return Err(&format!("Couldn't open {}: {}", path.display(), why.description())),
         Ok(file) => file
     };
     let mut buffer = [0; BUFFER_SIZE];
@@ -235,11 +273,27 @@ fn transform_in_place(path: &Path, matrix: &[[f32; 2]]) -> Result<(), &'static s
     // here we should verify we read the right number of records, like this:
     assert!(offset == 0, "Offset should be zero at end of reading");
     let records_read = position / header.record_length as u64 - header.record_length as u64;
-    assert!(records_read == header.total_particles as u64, "Records read should equal ")
+    assert!(records_read == header.total_particles as u64, &"Records read should equal");
 }
 
 fn main() {
-    let path = Path::new("input.egsphsp2");
-    combine(&[path], Path::new("output.egsphsp"), false);
-
+    let matches = App::new("rbeamdp")
+        .version("0.1")
+        .author("Henry B. <henry.baxter@gmail.com>")
+        .about("Supplement to beamdp for combining and transforming egsphsp (EGS phase space) files")
+        .arg(Arg::with_name("translate")
+            .help("Translate using -x and -y (in centimeters)"))
+        .arg(Arg::with_name("rotate")
+            .help("Rotate by -theta radians counter clockwise around z axis"))
+        .arg(Arg::with_name("reflect")
+            .help("Reflect in vector specified with -x and -y"))
+        .arg(Arg::with_name("in-place")
+            .help("Transform input file in-place (not for use with --combine)"))
+        .arg(Arg::with_name("combine")
+            .help("Combine input files and write to output file - does not adjust weights"))
+        .group(ArgGroup::with_name("command")
+            .args(&["translate", "rotate", "reflect", "combine"])
+            .required(true));
+    //let path = Path::new("input.egsphsp2");
+    //combine(&[path], Path::new("output.egsphsp"), false);
 }
