@@ -3,68 +3,243 @@ extern crate clap;
 
 use std::error::Error;
 use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 use std::io::SeekFrom;
+use std::str;
+use std::ops::Add;
+use std::fs;
 
 use byteorder::{ByteOrder, LittleEndian};
 
-fn main() {
+const BUFFER_SIZE: usize = 1024 * 64;
 
-    // get the input path
-    let path = Path::new("big.egsphsp2");
-    let display = path.display();
+#[derive(Debug)]
+struct Header {
+    mode: [u8; 5],
+    record_length: i32,
+    total_particles: i32,
+    total_photons: i32,
+    min_energy: f32,
+    max_energy: f32,
+    total_particles_in_source: f32
+}
 
-    // get the translation amounts
-    let x_translate = 2.0;
-    let y_translate = 1.0;
+#[derive(Debug)]
+struct Record {
+    latch: u32,
+    total_energy: f32,
+    x_cm: f32,
+    y_cm: f32,
+    x_cos: f32, // TODO verify these are normalized
+    y_cos: f32,
+    weight: f32, // also carries the sign of the z direction, yikes
+    zlast: Option<f32>
+}
 
-    // open the file for read/write
-	let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
-        Err(why) => panic!("Couldn't open {}: {}", display, why.description()),
+impl Header {
+    fn length() -> usize { 25 }
+    fn expected_bytes(&self) -> u64 { (self.total_particles as u64 + 1) * self.record_length as u64 }
+    fn new_from_bytes(bytes: &[u8]) -> Result<Header, &'static str> {
+        let mode = [0; 5];
+        mode.clone_from_slice(&bytes[0..5]);
+        let record_length = if &mode == b"MODE0" {
+            28
+        } else if &mode == b"MODE2" {
+            32
+        } else {
+            return Err("First 5 bytes are invalid, must be MODE0 or MODE2")
+        };
+        Ok(Header {
+            mode: mode,
+            record_length: record_length,
+            total_particles: LittleEndian::read_i32(&bytes[5..9]),
+            total_photons: LittleEndian::read_i32(&bytes[9..13]),
+            min_energy: LittleEndian::read_f32(&bytes[13..17]),
+            max_energy: LittleEndian::read_f32(&bytes[17..21]),
+            total_particles_in_source: LittleEndian::read_f32(&bytes[21..25]),
+        })
+    }
+    fn write_to_bytes(&self, buffer: &mut [u8]) {
+        buffer[0..5].clone_from_slice(&self.mode);
+        LittleEndian::write_i32(&mut buffer[5..9], self.total_particles);
+        LittleEndian::write_i32(&mut buffer[9..3], self.total_photons);
+        LittleEndian::write_f32(&mut buffer[13..17], self.min_energy);
+        LittleEndian::write_f32(&mut buffer[17..21], self.max_energy);
+        LittleEndian::write_f32(&mut buffer[21..25], self.total_particles_in_source);
+    }
+    fn merge(&self, other: &Header) {
+        assert!(&self.mode == &other.mode, "Merge mode mismatch");
+        self.total_particles += other.total_particles;
+        self.total_photons += other.total_photons;
+        self.min_energy += other.min_energy;
+        self.max_energy += other.max_energy;
+        self.total_particles_in_source += other.total_particles_in_source;
+    }
+}
+
+
+impl Record {
+    fn new_from_bytes(buffer: &[u8], using_zlast: bool) -> Record {
+        Record {
+            latch: LittleEndian::read_u32(&buffer[0..4]),
+            total_energy: LittleEndian::read_f32(&buffer[4..8]),
+            x_cm: LittleEndian::read_f32(&buffer[8..12]),
+            y_cm: LittleEndian::read_f32(&buffer[12..16]),
+            x_cos: LittleEndian::read_f32(&buffer[16..20]),
+            y_cos: LittleEndian::read_f32(&buffer[20..24]),
+            weight: LittleEndian::read_f32(&buffer[24..28]),
+            zlast: if using_zlast { Some(LittleEndian::read_f32(&buffer[28..32])) } else { None }
+        }
+    }
+    fn write_to_bytes(&self, buffer: &mut [u8], using_zlast: bool) {
+        LittleEndian::write_u32(&mut buffer[0..4], self.latch);
+        LittleEndian::write_f32(&mut buffer[4..8], self.total_energy);
+        LittleEndian::write_f32(&mut buffer[8..12], self.x_cm);
+        LittleEndian::write_f32(&mut buffer[12..16], self.y_cm);
+        LittleEndian::write_f32(&mut buffer[16..20], self.x_cos);
+        LittleEndian::write_f32(&mut buffer[20..24], self.y_cos);
+        LittleEndian::write_f32(&mut buffer[24..28], self.weight);
+        if using_zlast { LittleEndian::write_f32(&mut buffer[28..32], self.weight); }
+    }
+    fn transform(buffer: &mut [u8], matrix: &[[f32; 2]]) {
+        let mut x = LittleEndian::read_f32(&buffer[8..12]);
+        let mut y = LittleEndian::read_f32(&buffer[12..16]);
+        let mut x_cos = LittleEndian::read_f32(&buffer[16..20]);
+        let mut y_cos = LittleEndian::read_f32(&buffer[20..24]);
+        let x = x * matrix[0][0] + x * matrix[1][0];
+        let y = y * matrix[0][1] + x * matrix[1][1];
+        let x_cos = x_cos * matrix[0][0] + x_cos * matrix[1][0];
+        let y_cos = y_cos * matrix[0][1] + y_cos * matrix[1][1];
+        LittleEndian::write_f32(&mut buffer[8..12], x);
+        LittleEndian::write_f32(&mut buffer[12..16], y);
+        LittleEndian::write_f32(&mut buffer[16..20], x);
+        LittleEndian::write_f32(&mut buffer[20..24], y);
+    }
+
+}
+
+fn parse_header(path: &Path) -> Result<Header, &'static str> {
+    let mut file = match File::open(&path) {
+        Err(why) => return format!("Cannot open {}: {}", path.display(), why.description()),
         Ok(file) => file
     };
-
-    // read in the mode to get record length
-    let mut header_buffer = [0; 1024 * 64];
-    let mut read = match file.read(&mut header_buffer) {
-        Err(why) => panic!("Couldn't read header: {}", why.description()),
-        Ok(read) => read
+    let mut buffer = [0; 25];
+    file.read_exact(&mut buffer).unwrap();
+    let mut header = match Header::new_from_bytes(&buffer) {
+        Err(err) => return Err(err),
+        Ok(ok) => ok
     };
-    let mode = String::from_utf8_lossy(&header_buffer[0..5]);
-    let record_length = if mode == "MODE0" { 28 } else { 32 };
+    let metadata = file.metadata().unwrap();
+    if metadata.len() != header.expected_bytes() {
+        Err(format!("Malformed phase space file, expected {} bytes but found {}",
+            header.expected_bytes(), metadata.len()))
+    } else {
+        Ok(header)
+    }
+}
 
-    let total_particles = LittleEndian::read_i32(&header_buffer[5..9]);
-    println!("Total particles are {:?}", total_particles);
 
-    // ok so now we want to seek there
-    let xy_offset = 8;
-    let mut buffer;
-    buffer = header_buffer;
-    let mut offset = record_length;
+fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -> Result<(), &'static str> {
+    assert!(input_paths.len() > 0, "Cannot combine zero files");
+    let path = input_paths[0];
+    let mut header = try!(parse_header(&path));
+    let mut final_header = header;
+    for path in input_paths[1..].iter() {
+        header = try!(parse_header(&path));
+        if &header.mode != &final_header.mode {
+            return Err(format!("File {} has different mode/zlast than the initial file", path.display()))
+        }
+        final_header.merge(&header);
+    }
+    let mut out_file = try!(File::create(output_path)
+        .map_err(|why| format!("Cannot create {} for writing: {}",
+                               output_path.display(), why.description())));
+    let mut buffer = [0; BUFFER_SIZE];
+    final_header.write_to_bytes(&mut buffer);
+    for path in input_paths.iter() {
+        let mut in_file = try!(File::open(path)
+            .map_err(|why| format!("Cannot open {} for full read: {}",
+                                   path.display(), why.description())));
+        in_file.seek(SeekFrom::Start(final_header.record_length as u64)).unwrap();
+        let mut read = in_file.read(&mut buffer).unwrap();
+        while read != 0 {
+            out_file.write(&buffer).unwrap();
+            read = in_file.read(&mut buffer).unwrap();
+        }
+        if delete_after_read {
+            drop(in_file);
+            try!(fs::remove_file(path).map_err(|why| format!(
+                "Cannot remove input file {} after reading: {}", path.display(), why.description())));
+        }
+    };
+}
+
+fn transform(input_path: &Path, output_path: &Path, matrix: &[[f32; 2]]) -> Result<(), &'static str> {
+    // transform should take a read/write file handle? no
+    // here we can just copy the file, then transform in place?
+    // or, we can read it in, and write it somewhere else...
+    let header = try!(parse_header(input_path));
+    let mut input_file = match File::open(&input_path) {
+        Err(why) => return Err(format!("Couldn't open {}: {}", input_path.display(), why.description())),
+        Ok(file) => file
+    };
+    let mut output_file = match File::open(&output_path) {
+        Err(why) => return Err(format!("Couldn't open {} for writing: {}", output_path.display(), why.description())),
+        Ok(file) => file
+    };
+    let mut buffer = [0; BUFFER_SIZE];
+    let mut read = input_file.read(&mut buffer).unwrap();
+    let mut offset = header.record_length as usize;
     let mut position = 0;
     while read != 0 {
-        let number_records = (read - offset) / record_length;
+        let number_records = (read - offset) / header.record_length as usize;
         for i in 0..number_records {
-            let index = offset + i * record_length + xy_offset;
-            let x = LittleEndian::read_f32(&buffer[index..index+4]);
-            let y = LittleEndian::read_f32(&buffer[index+4..index+8]);
-            LittleEndian::write_f32(&mut buffer[index..index+4], x + x_translate);
-            LittleEndian::write_f32(&mut buffer[index+4..index+8], y + y_translate);
+            let index = offset + i * header.record_length as usize;
+            Record::transform(&mut buffer[index..], &matrix);
         }
-        offset = (read - offset) % record_length;
-        position = match file.seek(SeekFrom::Start(position)) {
-            Err(why) => panic!("Could not seek back for write: {}", why.description()),
-            Ok(position) => position
-        };
-        match file.write(&buffer[0..read]) {
-            Err(why) => panic!("Could not write: {}", why.description()),
-            Ok(pos) => pos
-        };
+        offset = (read - offset) % header.record_length as usize;
+        output_file.write(&buffer[..read]).unwrap();
         position += read as u64;
-        read = match file.read(&mut buffer) {
-            Err(why) => panic!("Couldn't read more: {}", why.description()),
-            Ok(read) => read
-        };
-    }
+        read = input_file.read(&mut buffer).unwrap();
+    };
+    // here we should verify we read the right number of records, like this:
+    assert!(offset == 0, "Offset should be zero at end of reading");
+    let records_read = position / header.record_length as u64 - header.record_length as u64;
+    assert!(records_read == header.total_particles as u64, "Records read should equal ")
+}
+
+fn transform_in_place(path: &Path, matrix: &[[f32; 2]]) -> Result<(), &'static str> {
+    let header = try!(parse_header(path));
+    let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Err(why) => return Err(format!("Couldn't open {}: {}", path.display(), why.description())),
+        Ok(file) => file
+    };
+    let mut buffer = [0; BUFFER_SIZE];
+    let mut read = file.read(&mut buffer).unwrap();
+    let mut offset = header.record_length as usize;
+    let mut position = 0;
+    while read != 0 {
+        let number_records = (read - offset) / header.record_length as usize;
+        for i in 0..number_records {
+            let index = offset + i * header.record_length as usize;
+            Record::transform(&mut buffer[index..], &matrix);
+        }
+        offset = (read - offset) % header.record_length as usize;
+        position = file.seek(SeekFrom::Start(position)).unwrap();
+        file.write(&buffer[..read]).unwrap();
+        position += read as u64;
+        read = file.read(&mut buffer).unwrap();
+    };
+    // here we should verify we read the right number of records, like this:
+    assert!(offset == 0, "Offset should be zero at end of reading");
+    let records_read = position / header.record_length as u64 - header.record_length as u64;
+    assert!(records_read == header.total_particles as u64, "Records read should equal ")
+}
+
+fn main() {
+    let path = Path::new("input.egsphsp2");
+    combine(&[path], Path::new("output.egsphsp"), false);
+
 }
