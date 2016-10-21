@@ -204,12 +204,14 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
     let mut out_file = try!(File::create(output_path));
     let mut buffer = [0; BUFFER_SIZE];
     final_header.write_to_bytes(&mut buffer);
+    let offset = final_header.record_length as usize;
+    try!(out_file.write(&buffer[..offset]));
     for path in input_paths.iter() {
         let mut in_file = try!(File::open(path));
-        try!(in_file.seek(SeekFrom::Start(final_header.record_length as u64)));
+        try!(in_file.seek(SeekFrom::Start(offset as u64)));
         let mut read = try!(in_file.read(&mut buffer));
         while read != 0 {
-            try!(out_file.write(&buffer));
+            try!(out_file.write(&buffer[..read]));
             read = try!(in_file.read(&mut buffer));
         }
         if delete_after_read {
@@ -308,7 +310,7 @@ fn it_does_not() {
 }
 
 fn main() {
-    let matches = App::new("rbeamdp")
+    let matches = App::new("beamdpr")
         .version("0.1")
         .author("Henry B. <henry.baxter@gmail.com>")
         .about("Supplement to beamdp for combining and transforming egsphsp (EGS phase space) files")
@@ -330,13 +332,11 @@ fn main() {
             .arg(Arg::with_name("x")
                 .short("x")
                 .takes_value(true)
-                .required_unless("y")
-                .default_value("0"))
+                .required_unless("y"))
             .arg(Arg::with_name("y")
                 .short("y")
                 .takes_value(true)
-                .required_unless("x")
-                .default_value("0"))
+                .required_unless("x"))
             .arg(Arg::with_name("input")
                 .help("Phase space file")
                 .required(true))
@@ -380,7 +380,6 @@ fn main() {
                 .help("Output file")
                 .required_unless("in-place")))
         .get_matches();
-    let mut matrix = [[0.0; 3]; 3];
     let result = if matches.subcommand_name().unwrap() == "combine" {
         let sub_matches = matches.subcommand_matches("combine").unwrap();
         let input_paths: Vec<&Path> = sub_matches.values_of("input").unwrap()
@@ -388,6 +387,7 @@ fn main() {
         let output_path = Path::new(sub_matches.value_of("output").unwrap());
         combine(&input_paths, output_path, sub_matches.is_present("delete-after"))
     } else {
+        let mut matrix = [[0.0; 3]; 3];
         match matches.subcommand_name().unwrap() {
             "translate" => {
                 let x = value_t!(matches, "x", f32).unwrap();
