@@ -12,7 +12,7 @@ use std::str;
 use std::fs;
 use std::io;
 use std::fmt;
-use std::cmp;
+use std::f64::consts;
 
 use byteorder::{ByteOrder, LittleEndian};
 use clap::{App, AppSettings, SubCommand, Arg};
@@ -231,7 +231,7 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
 fn transform(input_path: &Path, output_path: &Path, matrix: &[[f32; 3]; 3]) -> EGSResult<()> {
     let header = try!(parse_header(input_path));
     let mut input_file = try!(File::open(&input_path));
-    let mut output_file = try!(File::open(&output_path));
+    let mut output_file = try!(File::create(&output_path));
     let mut buffer = [0; BUFFER_SIZE];
     let mut read = try!(input_file.read(&mut buffer));
     let mut offset = header.record_length as usize;
@@ -289,6 +289,16 @@ impl Transform {
     }
 }
 
+#[allow(dead_code)]
+fn identical(path1: &Path, path2: &Path) -> bool {
+    let mut file1 = File::open(path1).unwrap();
+    let mut file2 = File::open(path2).unwrap();
+    let mut buf1 = Vec::new();
+    let mut buf2 = Vec::new();
+    file1.read_to_end(&mut buf1).unwrap();
+    file2.read_to_end(&mut buf2).unwrap();
+    buf1.as_slice() == buf2.as_slice()
+}
 
 #[test]
 fn first_file_header_correct() {
@@ -329,6 +339,54 @@ fn combined_file_header_correct() {
     // open the first one and make sure the entries are valid
 }
 
+#[test]
+fn combine_operation_matches_beamdp() {
+    let input_paths = vec![Path::new("test_data/first.egsphsp"), Path::new("test_data/second.egsphsp")];
+    let output_path = Path::new("test_data/output_combined.egsphsp");
+    let expected_path = Path::new("test_data/combined.egsphsp");
+    combine(&input_paths, output_path, false).unwrap();
+    assert!(identical(output_path, expected_path));
+}
+
+#[test]
+fn translate_operation() {
+    let input_path = Path::new("test_data/first.egsphsp");
+    let output_path = Path::new("test_data/translated.egsphsp");
+    let x = 5.0;
+    let y = 5.0;
+    let mut matrix = [[0.0; 3]; 3];
+    Transform::translation(&mut matrix, x, y);
+    transform(input_path, output_path, &matrix).unwrap();
+    Transform::translation(&mut matrix, -x, -y);
+    transform_in_place(output_path, &matrix).unwrap();
+    assert!(identical(input_path, output_path));
+}
+
+#[test]
+fn rotate_operation() {
+    let input_path = Path::new("test_data/first.egsphsp");
+    let output_path = Path::new("test_data/rotated.egsphsp");
+    let mut matrix = [[0.0; 3]; 3];
+    Transform::rotation(&mut matrix, consts::PI as f32);
+    transform(input_path, output_path, &matrix).unwrap();
+    Transform::rotation(&mut matrix, consts::PI as f32);
+    transform_in_place(output_path, &matrix).unwrap();
+    assert!(identical(input_path, output_path));
+}
+
+#[test]
+fn reflect_operation() {
+    let input_path = Path::new("test_data/first.egsphsp");
+    let output_path = Path::new("test_data/reflected.egsphsp");
+    let mut matrix = [[0.0; 3]; 3];
+    Transform::reflection(&mut matrix, 1.0, 0.0);
+    transform(input_path, output_path, &matrix).unwrap();
+    Transform::translation(&mut matrix, 1.0, 0.0);
+    transform_in_place(output_path, &matrix).unwrap();
+    assert!(identical(input_path, output_path));
+}
+
+
 /*
     well this was supposed to be a fast one that uses constant memory but who has the time
 fn identical(path1: &Path, path2: &Path) -> bool {
@@ -359,24 +417,7 @@ fn identical(path1: &Path, path2: &Path) -> bool {
 }
 */
 
-fn identical(path1: &Path, path2: &Path) -> bool {
-    let mut file1 = File::open(path1).unwrap();
-    let mut file2 = File::open(path2).unwrap();
-    let mut buf1 = Vec::new();
-    let mut buf2 = Vec::new();
-    file1.read_to_end(&mut buf1).unwrap();
-    file2.read_to_end(&mut buf2).unwrap();
-    buf1.as_slice() == buf2.as_slice()
-}
 
-#[test]
-fn combine_operation_matches_beamdp() {
-    let input_paths = vec![Path::new("test_data/first.egsphsp"), Path::new("test_data/second.egsphsp")];
-    let output_path = Path::new("test_data/output_combined.egsphsp");
-    let expected_path = Path::new("test_data/combined.egsphsp");
-    combine(&input_paths, output_path, false).unwrap();
-    assert!(identical(output_path, expected_path));
-}
 
 fn main() {
     let matches = App::new("beamdpr")
@@ -471,27 +512,44 @@ fn main() {
         let mut matrix = [[0.0; 3]; 3];
         match matches.subcommand_name().unwrap() {
             "translate" => {
-                let x = value_t!(matches, "x", f32).unwrap();
-                let y = value_t!(matches, "x", f32).unwrap();
+                let sub_matches = matches.subcommand_matches("translate").unwrap();
+                let x = value_t!(sub_matches, "x", f32).unwrap();
+                let y = value_t!(sub_matches, "y", f32).unwrap();
                 Transform::translation(&mut matrix, x, y);
+                let input_path = Path::new(sub_matches.value_of("input").unwrap());
+                if sub_matches.is_present("in-place") {
+                    transform_in_place(input_path, &matrix)
+                } else {
+                    let output_path = Path::new(sub_matches.value_of("input").unwrap());
+                    transform(input_path, output_path, &matrix)
+                }
             }
             "reflect" => {
-                let x = value_t!(matches, "x", f32).unwrap();
-                let y = value_t!(matches, "x", f32).unwrap();
+                let sub_matches = matches.subcommand_matches("reflect").unwrap();
+                let x = value_t!(sub_matches, "x", f32).unwrap();
+                let y = value_t!(sub_matches, "y", f32).unwrap();
                 Transform::reflection(&mut matrix, x, y);
+                let input_path = Path::new(sub_matches.value_of("input").unwrap());
+                if sub_matches.is_present("in-place") {
+                    transform_in_place(input_path, &matrix)
+                } else {
+                    let output_path = Path::new(sub_matches.value_of("input").unwrap());
+                    transform(input_path, output_path, &matrix)
+                }
             }
             "rotate" => {
-                let angle = value_t!(matches, "angle", f32).unwrap();
+                let sub_matches = matches.subcommand_matches("rotate").unwrap();
+                let angle = value_t!(sub_matches, "angle", f32).unwrap();
                 Transform::rotation(&mut matrix, angle);
+                let input_path = Path::new(sub_matches.value_of("input").unwrap());
+                if sub_matches.is_present("in-place") {
+                    transform_in_place(input_path, &matrix)
+                } else {
+                    let output_path = Path::new(sub_matches.value_of("input").unwrap());
+                    transform(input_path, output_path, &matrix)
+                }
             }
             _ => panic!("Programmer error, trying to match invalid command"),
-        };
-        let input_path = Path::new(matches.value_of("input").unwrap());
-        if matches.is_present("in-place") {
-            transform_in_place(input_path, &matrix)
-        } else {
-            let output_path = Path::new(matches.value_of("output").unwrap());
-            transform(input_path, output_path, &matrix)
         }
     };
 
