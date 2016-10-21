@@ -27,7 +27,7 @@ struct Header {
     total_photons: i32,
     min_energy: f32,
     max_energy: f32,
-    total_particles_in_source: f32
+    total_particles_in_source: f32,
 }
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ struct Record {
     x_cos: f32, // TODO verify these are normalized
     y_cos: f32,
     weight: f32, // also carries the sign of the z direction, yikes
-    zlast: Option<f32>
+    zlast: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ enum EGSError {
     Io(io::Error),
     BadMode,
     BadLength,
-    ModeMismatch
+    ModeMismatch,
 }
 
 type EGSResult<T> = Result<T, EGSError>;
@@ -62,11 +62,15 @@ impl fmt::Display for EGSError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             EGSError::Io(ref err) => err.fmt(f),
-            EGSError::BadMode => write!(f, "First 5 bytes of file are invalid, \
-                                            must be MODE0 or MODE2"),
-            EGSError::BadLength => write!(f, "Number of total particles does not\
-                                             match byte length of file"),
-            EGSError::ModeMismatch => write!(f, "Input file MODE0/MODE2 do not match")
+            EGSError::BadMode => {
+                write!(f,
+                       "First 5 bytes of file are invalid, must be MODE0 or MODE2")
+            }
+            EGSError::BadLength => {
+                write!(f,
+                       "Number of total particles does notmatch byte length of file")
+            }
+            EGSError::ModeMismatch => write!(f, "Input file MODE0/MODE2 do not match"),
         }
     }
 }
@@ -77,7 +81,7 @@ impl Error for EGSError {
             EGSError::Io(ref err) => err.description(),
             EGSError::BadMode => "invalid mode",
             EGSError::BadLength => "bad file length",
-            EGSError::ModeMismatch => "mode mismatch"
+            EGSError::ModeMismatch => "mode mismatch",
         }
     }
 
@@ -86,13 +90,15 @@ impl Error for EGSError {
             EGSError::Io(ref err) => Some(err),
             EGSError::BadMode => None,
             EGSError::BadLength => None,
-            EGSError::ModeMismatch => None
+            EGSError::ModeMismatch => None,
         }
     }
 }
 
 impl Header {
-    fn expected_bytes(&self) -> u64 { (self.total_particles as u64 + 1) * self.record_length as u64 }
+    fn expected_bytes(&self) -> u64 {
+        (self.total_particles as u64 + 1) * self.record_length as u64
+    }
     fn new_from_bytes(bytes: &[u8]) -> EGSResult<Header> {
         let mut mode = [0; 5];
         mode.clone_from_slice(&bytes[..5]);
@@ -101,7 +107,7 @@ impl Header {
         } else if &mode == b"MODE2" {
             32
         } else {
-            return Err(EGSError::BadMode)
+            return Err(EGSError::BadMode);
         };
         Ok(Header {
             mode: mode,
@@ -133,30 +139,29 @@ impl Header {
 
 
 impl Record {
-    /*
-    fn new_from_bytes(buffer: &[u8], using_zlast: bool) -> Record {
-        Record {
-            latch: LittleEndian::read_u32(&buffer[0..4]),
-            total_energy: LittleEndian::read_f32(&buffer[4..8]),
-            x_cm: LittleEndian::read_f32(&buffer[8..12]),
-            y_cm: LittleEndian::read_f32(&buffer[12..16]),
-            x_cos: LittleEndian::read_f32(&buffer[16..20]),
-            y_cos: LittleEndian::read_f32(&buffer[20..24]),
-            weight: LittleEndian::read_f32(&buffer[24..28]),
-            zlast: if using_zlast { Some(LittleEndian::read_f32(&buffer[28..32])) } else { None }
-        }
-    }
-    fn write_to_bytes(&self, buffer: &mut [u8], using_zlast: bool) {
-        LittleEndian::write_u32(&mut buffer[0..4], self.latch);
-        LittleEndian::write_f32(&mut buffer[4..8], self.total_energy);
-        LittleEndian::write_f32(&mut buffer[8..12], self.x_cm);
-        LittleEndian::write_f32(&mut buffer[12..16], self.y_cm);
-        LittleEndian::write_f32(&mut buffer[16..20], self.x_cos);
-        LittleEndian::write_f32(&mut buffer[20..24], self.y_cos);
-        LittleEndian::write_f32(&mut buffer[24..28], self.weight);
-        if using_zlast { LittleEndian::write_f32(&mut buffer[28..32], self.weight); }
-    }
-    */
+    // fn new_from_bytes(buffer: &[u8], using_zlast: bool) -> Record {
+    // Record {
+    // latch: LittleEndian::read_u32(&buffer[0..4]),
+    // total_energy: LittleEndian::read_f32(&buffer[4..8]),
+    // x_cm: LittleEndian::read_f32(&buffer[8..12]),
+    // y_cm: LittleEndian::read_f32(&buffer[12..16]),
+    // x_cos: LittleEndian::read_f32(&buffer[16..20]),
+    // y_cos: LittleEndian::read_f32(&buffer[20..24]),
+    // weight: LittleEndian::read_f32(&buffer[24..28]),
+    // zlast: if using_zlast { Some(LittleEndian::read_f32(&buffer[28..32])) } else { None }
+    // }
+    // }
+    // fn write_to_bytes(&self, buffer: &mut [u8], using_zlast: bool) {
+    // LittleEndian::write_u32(&mut buffer[0..4], self.latch);
+    // LittleEndian::write_f32(&mut buffer[4..8], self.total_energy);
+    // LittleEndian::write_f32(&mut buffer[8..12], self.x_cm);
+    // LittleEndian::write_f32(&mut buffer[12..16], self.y_cm);
+    // LittleEndian::write_f32(&mut buffer[16..20], self.x_cos);
+    // LittleEndian::write_f32(&mut buffer[20..24], self.y_cos);
+    // LittleEndian::write_f32(&mut buffer[24..28], self.weight);
+    // if using_zlast { LittleEndian::write_f32(&mut buffer[28..32], self.weight); }
+    // }
+    //
     fn transform(buffer: &mut [u8], matrix: &[[f32; 3]; 3]) {
         let mut x = LittleEndian::read_f32(&buffer[8..12]);
         let mut y = LittleEndian::read_f32(&buffer[12..16]);
@@ -171,7 +176,6 @@ impl Record {
         LittleEndian::write_f32(&mut buffer[16..20], x_cos);
         LittleEndian::write_f32(&mut buffer[20..24], y_cos);
     }
-
 }
 
 
@@ -197,7 +201,7 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
     for path in input_paths[1..].iter() {
         header = try!(parse_header(&path));
         if &header.mode != &final_header.mode {
-            return Err(EGSError::ModeMismatch)
+            return Err(EGSError::ModeMismatch);
         }
         final_header.merge(&header);
     }
@@ -218,7 +222,7 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
             drop(in_file);
             try!(fs::remove_file(path));
         }
-    };
+    }
     Ok(())
 }
 
@@ -238,7 +242,7 @@ fn transform(input_path: &Path, output_path: &Path, matrix: &[[f32; 3]; 3]) -> E
         offset = (read - offset) % header.record_length as usize;
         try!(output_file.write(&buffer[..read]));
         read = try!(input_file.read(&mut buffer));
-    };
+    }
     Ok(())
 }
 
@@ -260,7 +264,7 @@ fn transform_in_place(path: &Path, matrix: &[[f32; 3]; 3]) -> EGSResult<()> {
         try!(file.write(&buffer[..read]));
         position += read as u64;
         read = try!(file.read(&mut buffer));
-    };
+    }
     Ok(())
 }
 
@@ -271,33 +275,21 @@ impl Transform {
         let norm = (x_raw * x_raw + y_raw * y_raw).sqrt();
         let x = x_raw / norm;
         let y = y_raw / norm;
-        *matrix = [
-            [x * x - y * y, 2.0 * x * y, 0.0],
-            [2.0 * x * y, y * y - x * x, 0.0],
-            [0.0, 0.0, 1.0]
-        ];
+        *matrix =
+            [[x * x - y * y, 2.0 * x * y, 0.0], [2.0 * x * y, y * y - x * x, 0.0], [0.0, 0.0, 1.0]];
     }
     fn translation(matrix: &mut [[f32; 3]; 3], x: f32, y: f32) {
-        *matrix = [
-            [1.0, 0.0, x],
-            [0.0, 1.0, y],
-            [0.0, 0.0, 1.0]
-        ];
+        *matrix = [[1.0, 0.0, x], [0.0, 1.0, y], [0.0, 0.0, 1.0]];
     }
     fn rotation(matrix: &mut [[f32; 3]; 3], theta: f32) {
-        *matrix = [
-            [theta.cos(), -theta.sin(), 0.0],
-            [theta.cos(), theta.sin(), 0.0],
-            [0.0, 0.0, 1.0]
-        ];
+        *matrix =
+            [[theta.cos(), -theta.sin(), 0.0], [theta.cos(), theta.sin(), 0.0], [0.0, 0.0, 1.0]];
     }
 }
 
 
 #[test]
-fn who_knows() {
-
-}
+fn who_knows() {}
 
 #[test]
 fn it_works() {
@@ -313,10 +305,12 @@ fn main() {
     let matches = App::new("beamdpr")
         .version("0.1")
         .author("Henry B. <henry.baxter@gmail.com>")
-        .about("Supplement to beamdp for combining and transforming egsphsp (EGS phase space) files")
+        .about("Supplement to beamdp for combining and transforming egsphsp (EGS phase space) \
+                files")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .subcommand(SubCommand::with_name("combine")
-            .about("Combine phase space from one or more input files into outputfile - does not adjust weights")
+            .about("Combine phase space from one or more input files into outputfile - does not \
+                    adjust weights")
             .arg(Arg::with_name("input")
                 .required(true)
                 .multiple(true))
@@ -327,7 +321,9 @@ fn main() {
                 .required(true)))
         .subcommand(SubCommand::with_name("translate")
             .about("Translate using X and Y (in centimeters)")
-            .arg(Arg::with_name("in-place").short("i").long("in-place")
+            .arg(Arg::with_name("in-place")
+                .short("i")
+                .long("in-place")
                 .help("Transform input file in-place"))
             .arg(Arg::with_name("x")
                 .short("x")
@@ -345,7 +341,9 @@ fn main() {
                 .required_unless("in-place")))
         .subcommand(SubCommand::with_name("rotate")
             .about("Rotate by --angle radians counter clockwise around z axis")
-            .arg(Arg::with_name("in-place").short("i").long("in-place")
+            .arg(Arg::with_name("in-place")
+                .short("i")
+                .long("in-place")
                 .help("Transform input file in-place"))
             .arg(Arg::with_name("angle")
                 .short("a")
@@ -361,7 +359,9 @@ fn main() {
                 .required_unless("in-place")))
         .subcommand(SubCommand::with_name("reflect")
             .about("Reflect in vector specified with -x and -y")
-            .arg(Arg::with_name("in-place").short("i").long("in-place")
+            .arg(Arg::with_name("in-place")
+                .short("i")
+                .long("in-place")
                 .help("Transform input file in-place"))
             .arg(Arg::with_name("x")
                 .short("x")
@@ -382,10 +382,14 @@ fn main() {
         .get_matches();
     let result = if matches.subcommand_name().unwrap() == "combine" {
         let sub_matches = matches.subcommand_matches("combine").unwrap();
-        let input_paths: Vec<&Path> = sub_matches.values_of("input").unwrap()
-            .map(|s| Path::new(s)).collect();
+        let input_paths: Vec<&Path> = sub_matches.values_of("input")
+            .unwrap()
+            .map(|s| Path::new(s))
+            .collect();
         let output_path = Path::new(sub_matches.value_of("output").unwrap());
-        combine(&input_paths, output_path, sub_matches.is_present("delete-after"))
+        combine(&input_paths,
+                output_path,
+                sub_matches.is_present("delete-after"))
     } else {
         let mut matrix = [[0.0; 3]; 3];
         match matches.subcommand_name().unwrap() {
@@ -393,17 +397,17 @@ fn main() {
                 let x = value_t!(matches, "x", f32).unwrap();
                 let y = value_t!(matches, "x", f32).unwrap();
                 Transform::translation(&mut matrix, x, y);
-            },
+            }
             "reflect" => {
                 let x = value_t!(matches, "x", f32).unwrap();
                 let y = value_t!(matches, "x", f32).unwrap();
                 Transform::reflection(&mut matrix, x, y);
-            },
+            }
             "rotate" => {
                 let angle = value_t!(matches, "angle", f32).unwrap();
                 Transform::rotation(&mut matrix, angle);
-            },
-            _ => panic!("Programmer error, trying to match invalid command")
+            }
+            _ => panic!("Programmer error, trying to match invalid command"),
         };
         let input_path = Path::new(matches.value_of("input").unwrap());
         if matches.is_present("in-place") {
@@ -416,6 +420,6 @@ fn main() {
 
     match result {
         Ok(()) => println!("Done :)"),
-        Err(err) => println!("Problem: {}", err.description())
+        Err(err) => println!("Problem: {}", err.description()),
     };
 }
