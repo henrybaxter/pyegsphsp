@@ -12,6 +12,7 @@ use std::str;
 use std::fs;
 use std::io;
 use std::fmt;
+use std::cmp;
 
 use byteorder::{ByteOrder, LittleEndian};
 use clap::{App, AppSettings, SubCommand, Arg};
@@ -114,8 +115,8 @@ impl Header {
             record_length: record_length,
             total_particles: LittleEndian::read_i32(&bytes[5..9]),
             total_photons: LittleEndian::read_i32(&bytes[9..13]),
-            min_energy: LittleEndian::read_f32(&bytes[13..17]),
-            max_energy: LittleEndian::read_f32(&bytes[17..21]),
+            max_energy: LittleEndian::read_f32(&bytes[13..17]),
+            min_energy: LittleEndian::read_f32(&bytes[17..21]),
             total_particles_in_source: LittleEndian::read_f32(&bytes[21..25]),
         })
     }
@@ -123,16 +124,16 @@ impl Header {
         buffer[0..5].clone_from_slice(&self.mode);
         LittleEndian::write_i32(&mut buffer[5..9], self.total_particles);
         LittleEndian::write_i32(&mut buffer[9..13], self.total_photons);
-        LittleEndian::write_f32(&mut buffer[13..17], self.min_energy);
-        LittleEndian::write_f32(&mut buffer[17..21], self.max_energy);
+        LittleEndian::write_f32(&mut buffer[13..17], self.max_energy);
+        LittleEndian::write_f32(&mut buffer[17..21], self.min_energy);
         LittleEndian::write_f32(&mut buffer[21..25], self.total_particles_in_source);
     }
     fn merge(&mut self, other: &Header) {
         assert!(&self.mode == &other.mode, "Merge mode mismatch");
         self.total_particles += other.total_particles;
         self.total_photons += other.total_photons;
-        self.min_energy += other.min_energy;
-        self.max_energy += other.max_energy;
+        self.min_energy = self.min_energy.min(other.min_energy);
+        self.max_energy = self.max_energy.max(other.max_energy);
         self.total_particles_in_source += other.total_particles_in_source;
     }
 }
@@ -205,6 +206,7 @@ fn combine(input_paths: &[&Path], output_path: &Path, delete_after_read: bool) -
         }
         final_header.merge(&header);
     }
+    println!("final_header = {:?}", final_header);
     let mut out_file = try!(File::create(output_path));
     let mut buffer = [0; BUFFER_SIZE];
     final_header.write_to_bytes(&mut buffer);
@@ -289,16 +291,91 @@ impl Transform {
 
 
 #[test]
-fn who_knows() {}
-
-#[test]
-fn it_works() {
-    assert!(true)
+fn first_file_header_correct() {
+    let path = Path::new("test_data/first.egsphsp");
+    let header = parse_header(path).unwrap();
+    assert!(header.record_length == 28);
+    assert!(header.total_particles == 352, format!("Total particles incorrect, found {:?}", header.total_particles));
+    assert!(header.total_photons == 303, format!("Total photons incorrect, found {:?}", header.total_photons));
+    assert!(header.max_energy - 0.1988 < 0.0001, format!("Max energy incorrect, found {:?}", header.max_energy));
+    assert!(header.min_energy - 0.0157 < 0.0001, format!("Min energy incorrect, found {:?}", header.min_energy));
+    assert!(header.total_particles_in_source - 100.0 < 0.0001, format!("Total particles in source incorrect, found {:?}", header.total_particles_in_source));
+    // open the first one and make sure the entries are valid
 }
 
 #[test]
-fn it_does_not() {
-    assert!(false)
+fn second_file_header_correct() {
+    let path = Path::new("test_data/second.egsphsp");
+    let header = parse_header(path).unwrap();
+    assert!(header.record_length == 28);
+    assert!(header.total_particles == 352, format!("Total particles incorrect, found {:?}, header.total_particles", header.total_particles));
+    assert!(header.total_photons == 303, format!("Total photons incorrect, found {:?}", header.total_photons));
+    assert!(header.max_energy - 0.1988 < 0.0001, format!("Max energy incorrect, found {:?}", header.max_energy));
+    assert!(header.min_energy - 0.0157 < 0.0001, format!("Min energy incorrect, found {:?}", header.min_energy));
+    assert!(header.total_particles_in_source - 100.0 < 0.0001, format!("Total particles in source incorrect, found {:?}", header.total_particles_in_source));
+    // open the first one and make sure the entries are valid
+}
+
+#[test]
+fn combined_file_header_correct() {
+    let path = Path::new("test_data/combined.egsphsp");
+    let header = parse_header(path).unwrap();
+    assert!(header.record_length == 28);
+    assert!(header.total_particles == 352 * 2, format!("Total particles incorrect, found {:?}, header.total_particles", header.total_particles));
+    assert!(header.total_photons == 303 * 2, format!("Total photons incorrect, found {:?}", header.total_photons));
+    assert!(header.max_energy - 0.1988 < 0.0001, format!("Max energy incorrect, found {:?}", header.max_energy));
+    assert!(header.min_energy - 0.0157 < 0.0001, format!("Min energy incorrect, found {:?}", header.min_energy));
+    assert!(header.total_particles_in_source - 100.0 * 2.0 < 0.0001, format!("Total particles in source incorrect, found {:?}", header.total_particles_in_source));
+    // open the first one and make sure the entries are valid
+}
+
+/*
+    well this was supposed to be a fast one that uses constant memory but who has the time
+fn identical(path1: &Path, path2: &Path) -> bool {
+    let mut file1 = File::open(path1).unwrap();
+    let mut file2 = File::open(path2).unwrap();
+    let mut buffer1 = [0; BUFFER_SIZE];
+    let mut buffer2 = [0; BUFFER_SIZE];
+    let mut offset_buffer = [0; BUFFER_SIZE];
+    let mut read1 = file1.read(&mut buffer1).unwrap();
+    let mut read2 = file2.read(&mut buffer2).unwrap();
+    let mut offset1;
+    let mut offset2;
+    while read1 != 0 && read2 != 0 {
+        let read_both = cmp::min(read1, read2);
+        offset1 = read1 - read_both;
+        offset2 = read2 - read_both;
+        if buffer1[..read_both] != buffer2[..read_both] {
+            return false;
+        };
+        offset_buffer.clone_from_slice(&buffer1[read_both..read_both + offset1]);
+        buffer1.clone_from_slice(&offset_buffer[..offset1]);
+        offset_buffer.clone_from_slice(&buffer2[read_both..read_both + offset2]);
+        buffer2.clone_from_slice(&offset_buffer[..offset2]);
+        read1 = file1.read(&mut buffer1[offset1..]).unwrap();
+        read2 = file2.read(&mut buffer2[offset2..]).unwrap();
+    };
+    buffer1[..read_both] == buffer2[..read_both]
+}
+*/
+
+fn identical(path1: &Path, path2: &Path) -> bool {
+    let mut file1 = File::open(path1).unwrap();
+    let mut file2 = File::open(path2).unwrap();
+    let mut buf1 = Vec::new();
+    let mut buf2 = Vec::new();
+    file1.read_to_end(&mut buf1).unwrap();
+    file2.read_to_end(&mut buf2).unwrap();
+    buf1.as_slice() == buf2.as_slice()
+}
+
+#[test]
+fn combine_operation_matches_beamdp() {
+    let input_paths = vec![Path::new("test_data/first.egsphsp"), Path::new("test_data/second.egsphsp")];
+    let output_path = Path::new("test_data/output_combined.egsphsp");
+    let expected_path = Path::new("test_data/combined.egsphsp");
+    combine(&input_paths, output_path, false).unwrap();
+    assert!(identical(output_path, expected_path));
 }
 
 fn main() {
