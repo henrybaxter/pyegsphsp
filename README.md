@@ -10,6 +10,3 @@ But if you _do_ want to use this, [let me know!](https://github.com/henrybaxter/
 
 - Python 2.7, 3.x
 
-## Installation:
-
-- pip install pyegsphsp
